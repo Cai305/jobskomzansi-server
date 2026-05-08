@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "src/index.ts",
+      "use": "@vercel/node"
+    }
+  ],
+  "functions": {
+    "src/index.ts": {
+      "maxDuration": 15
+    }
+  },
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "src/index.ts"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/refresh",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}
