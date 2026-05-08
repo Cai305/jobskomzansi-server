@@ -78,15 +78,21 @@ const connectDB = async () => {
   }
 };
 
-// Initialize DB connection
+// Initialize DB connection (this is still useful for warm starts)
 connectDB().catch(err => console.error('Initial DB connection failed:', err));
 
-// Middleware to ensure DB connection is ready
-app.use((req, res, next) => {
-  if (!isConnected) {
-    return res.status(503).json({ error: 'Database is still connecting. Please try again in a few seconds.' });
+// Middleware to ensure DB connection is ready (Serverless Friendly)
+app.use(async (req, res, next) => {
+  try {
+    if (!isConnected || mongoose.connection.readyState !== 1) {
+      console.log('Database not connected, attempting to connect...');
+      await connectDB();
+    }
+    next();
+  } catch (error) {
+    console.error('Middleware database connection error:', error);
+    res.status(503).json({ error: 'Database connection failed. Please try again in a few seconds.' });
   }
-  next();
 });
 
 // Root route for health check

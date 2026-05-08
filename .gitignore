@@ -4,3 +4,5 @@ dist/
 .vercel
 scratch/
 *.log
+
+.vercel
