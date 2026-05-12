@@ -2,6 +2,7 @@ import axios from 'axios';
 import { Job } from '../models/job.model';
 import Parser from 'rss-parser';
 import mongoose from 'mongoose';
+import * as cheerio from 'cheerio';
 
 const TIMEOUT = 15000;
 const rssParser = new Parser();
@@ -31,7 +32,7 @@ export class JobAggregatorService {
   async getJobsFromDB(keyword: string, location: string, userId?: string): Promise<Job[]> {
     console.log(`Searching DB for: "${keyword}" in "${location}"...`);
     const query: any = {};
-    
+
     if (keyword) {
       query.$or = [
         { title: { $regex: keyword, $options: 'i' } },
@@ -82,7 +83,8 @@ export class JobAggregatorService {
         this.fetchHimalayas(''),
         this.fetchArbeitnow(),
         this.fetchRemotive(''),
-        this.fetchJobicyRSS()
+        this.fetchJobicyRSS(),
+        this.fetchPuffAndPass()
       ]);
 
       let allJobs: any[] = [];
@@ -95,21 +97,30 @@ export class JobAggregatorService {
       if (allJobs.length > 0) {
         // Drop existing aggregated jobs and insert new ones
         await JobModel.deleteMany({ isAggregated: true });
-        
+
         // Deduplicate before inserting
         const seen = new Set();
-        const uniqueJobs = allJobs.filter(job => {
-          // Skip jobs without valid application links
+        const filteredJobs = allJobs.filter(job => {
           if (!job.url || job.url === '#' || job.url === 'N/A' || job.url.trim() === '') return false;
-          
           const key = `${job.title}-${job.company}`.toLowerCase();
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
         });
 
-        await JobModel.insertMany(uniqueJobs, { ordered: false });
-        console.log(`Cache refreshed: ${uniqueJobs.length} jobs stored in MongoDB`);
+        // Filter out jobs that already exist in DB to avoid bulk write errors
+        const jobIds = filteredJobs.map(j => j.id);
+        const existingJobs = await JobModel.find({ id: { $in: jobIds } }, { id: 1 }).lean();
+        const existingIds = new Set(existingJobs.map(j => j.id));
+
+        const finalJobsToInsert = filteredJobs.filter(j => !existingIds.has(j.id));
+
+        if (finalJobsToInsert.length > 0) {
+          await JobModel.insertMany(finalJobsToInsert, { ordered: false });
+          console.log(`Cache refreshed: ${finalJobsToInsert.length} new jobs stored in MongoDB`);
+        } else {
+          console.log('No new jobs to insert.');
+        }
       }
     } catch (e: any) {
       console.error('Refresh cache failed:', e.message);
@@ -193,6 +204,101 @@ export class JobAggregatorService {
         trusted_score: 2,
       }));
     } catch (e) { return []; }
+  }
+  private async fetchPuffAndPass(): Promise<Job[]> {
+    try {
+      console.log('Fetching Puff and Pass jobs (categories and tags)...');
+      const categories = [
+        'internships',
+        'learnerships',
+        'apprenticeship',
+        'bursaries',
+        'graduate-programmes-2',
+        'in-service-training'
+      ];
+
+      const tags = [
+        'accounting',
+        'finance',
+        'information-technology',
+        'computer-science',
+        'financial-management',
+        'information-systems',
+        'human-resources-management',
+        'electrical-engineering',
+        'mechanical-engineering',
+        'marketing'
+      ];
+
+      let allScrapedJobs: Job[] = [];
+      const seenUrls = new Set<string>();
+
+      const fetchPage = async (baseUrl: string, type: string, name: string) => {
+        for (let page = 1; page <= 2; page++) {
+          const url = page === 1 ? baseUrl : `${baseUrl}/page/${page}`;
+          try {
+            const { data } = await axios.get(url, {
+              timeout: TIMEOUT,
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+              }
+            });
+            const $ = cheerio.load(data);
+
+            $('article, .post, .entry, .post-item, .listing-item').each((i, el) => {
+              const titleElement = $(el).find('h2 a, h1 a, .entry-title a').first();
+              const title = titleElement.text().trim();
+              let jobUrl = titleElement.attr('href');
+
+              if (!title || !jobUrl) return;
+              if (!jobUrl.startsWith('http')) jobUrl = `https://www.puffandpass.co.za${jobUrl}`;
+              if (seenUrls.has(jobUrl)) return;
+              seenUrls.add(jobUrl);
+
+              const contentText = $(el).text();
+
+              let company = 'Puff & Pass';
+              if (title.includes(':')) {
+                company = title.split(':')[0].trim();
+              }
+
+              const locationMatch = contentText.match(/Location:\s*([^.\n]+)/i);
+              const location = locationMatch ? locationMatch[1].trim() : 'South Africa';
+
+              allScrapedJobs.push({
+                id: `puffandpass-${Buffer.from(jobUrl).toString('hex')}`,
+                title: title,
+                company: company,
+                location: location,
+                remote: location.toLowerCase().includes('remote'),
+                url: jobUrl,
+                source: 'System',
+                date_posted: new Date().toISOString(),
+                description: contentText.substring(0, 500).trim() + '...',
+                trusted_score: 3,
+                tags: [name]
+              });
+            });
+          } catch (err: any) {
+            console.warn(`Failed to fetch ${url}: ${err.message}`);
+          }
+        }
+      };
+
+      for (const cat of categories) {
+        await fetchPage(`https://www.puffandpass.co.za/category/${cat}`, 'category', cat);
+      }
+
+      for (const tag of tags) {
+        await fetchPage(`https://www.puffandpass.co.za/tag/${tag}`, 'tag', tag);
+      }
+
+      console.log(`Scraped total ${allScrapedJobs.length} jobs from Puff and Pass`);
+      return allScrapedJobs;
+    } catch (e: any) {
+      console.error('Puff and Pass Scrape Error:', e.message);
+      return [];
+    }
   }
 
 
