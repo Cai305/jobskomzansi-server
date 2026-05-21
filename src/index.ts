@@ -115,8 +115,14 @@ app.use(async (req, res, next) => {
   if (!isConnected) {
     try {
       await connectDB();
-    } catch (error) {
-      return res.status(503).json({ error: 'Database connection failed. Please try again later.' });
+    } catch (error: any) {
+      const uriStart = MONGODB_URI.substring(0, 15);
+      return res.status(503).json({ 
+        error: 'Database connection failed. Please try again later.',
+        details: error?.message || String(error),
+        uriHint: uriStart,
+        envVars: Object.keys(process.env).join(',')
+      });
     }
   }
   next();
