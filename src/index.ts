@@ -25,11 +25,14 @@ setupSwagger(app);
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/jobskomzansi';
 
 let isConnected = false;
+let connectionPromise: Promise<void> | null = null;
 const connectDB = async () => {
   if (isConnected) return;
+  if (connectionPromise) return connectionPromise;
   
   console.log('Connecting to MongoDB...');
-  try {
+  connectionPromise = (async () => {
+    try {
     await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
     isConnected = true;
     console.log('Connected to MongoDB');
@@ -97,17 +100,24 @@ const connectDB = async () => {
     }
   } catch (err) {
     console.error('MongoDB connection error:', err);
+    connectionPromise = null;
     throw err;
   }
+  })();
+  return connectionPromise;
 };
 
 // Initialize DB connection
 connectDB().catch(err => console.error('Initial DB connection failed:', err));
 
 // Middleware to ensure DB connection is ready
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
   if (!isConnected) {
-    return res.status(503).json({ error: 'Database is still connecting. Please try again in a few seconds.' });
+    try {
+      await connectDB();
+    } catch (error) {
+      return res.status(503).json({ error: 'Database connection failed. Please try again later.' });
+    }
   }
   next();
 });
