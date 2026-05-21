@@ -2,11 +2,16 @@ import nodemailer from 'nodemailer';
 
 class EmailService {
   private transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: process.env.SMTP_SERVER || 'smtppro.zoho.com',
+    port: parseInt(process.env.SMTP_PORT || '465'),
+    secure: (process.env.SMTP_PORT || '465') === '465', // true for 465, false for other ports like 587
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASS,
     },
+    tls: {
+      rejectUnauthorized: false
+    }
   });
 
   async sendOTP(email: string, otp: string) {
@@ -114,6 +119,51 @@ class EmailService {
       `,
     };
 
+    return this.transporter.sendMail(mailOptions);
+  }
+
+  async sendApplicationNotification(employerEmail: string, jobTitle: string, candidateName: string) {
+    const mailOptions = {
+      from: `"JobsKomzansi" <${process.env.EMAIL_USER}>`,
+      to: employerEmail,
+      subject: `New Application for ${jobTitle}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+          <h2 style="color: #3b82f6; text-align: center;">New Application Received</h2>
+          <p>Hi there,</p>
+          <p>You have received a new application for your job listing: <strong>${jobTitle}</strong>.</p>
+          <p><strong>Candidate:</strong> ${candidateName}</p>
+          <p>Please log in to your dashboard to review the application and resume.</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="http://localhost:4200/dashboard" style="background: #3b82f6; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold;">View Application</a>
+          </div>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+          <p style="font-size: 12px; color: #9ca3af; text-align: center;">&copy; 2026 JobsKomzansi. All rights reserved.</p>
+        </div>
+      `,
+    };
+    return this.transporter.sendMail(mailOptions);
+  }
+
+  async sendApplicationStatusUpdate(candidateEmail: string, jobTitle: string, status: string) {
+    const mailOptions = {
+      from: `"JobsKomzansi" <${process.env.EMAIL_USER}>`,
+      to: candidateEmail,
+      subject: `Application Status Update: ${jobTitle}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+          <h2 style="color: #3b82f6; text-align: center;">Application Update</h2>
+          <p>Hi there,</p>
+          <p>Your application status for the position <strong>${jobTitle}</strong> has been updated to: <strong style="text-transform: capitalize;">${status}</strong>.</p>
+          <p>Please log in to your account to see more details.</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="http://localhost:4200/saved-jobs" style="background: #3b82f6; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold;">My Applications</a>
+          </div>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+          <p style="font-size: 12px; color: #9ca3af; text-align: center;">&copy; 2026 JobsKomzansi. All rights reserved.</p>
+        </div>
+      `,
+    };
     return this.transporter.sendMail(mailOptions);
   }
 }

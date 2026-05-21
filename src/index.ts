@@ -1,12 +1,14 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import path from 'path';
 import express from 'express';
 import cors from 'cors';
 import mongoose from 'mongoose';
 import cron from 'node-cron';
 import { JobAggregatorService } from './services/job-aggregator.service';
 import authRoutes from './routes/auth.routes';
+import applicationRoutes from './routes/application.routes';
 import { JobReportModel } from './models/job-report.model';
 
 import { setupSwagger } from './swagger';
@@ -63,6 +65,27 @@ const connectDB = async () => {
       }
       console.log('Migration complete');
     }
+
+    // Migration: Populate requirements for existing jobs that don't have them
+    const { JobModel } = await import('./models/job.model');
+    const jobsWithoutRequirements = await JobModel.find({
+      $or: [
+        { requirements: { $exists: false } },
+        { requirements: { $size: 0 } }
+      ]
+    });
+    if (jobsWithoutRequirements.length > 0) {
+      console.log(`Migrating ${jobsWithoutRequirements.length} jobs to include requirements...`);
+      let migratedCount = 0;
+      for (const job of jobsWithoutRequirements) {
+        const requirements = jobService.extractRequirements(job.title || '', job.description || '');
+        if (requirements && requirements.length > 0) {
+          await JobModel.updateOne({ _id: job._id }, { $set: { requirements } });
+          migratedCount++;
+        }
+      }
+      console.log(`Successfully migrated ${migratedCount} jobs with dynamic requirements`);
+    }
     
     // checkInitialFetch
     if (mongoose.connection.db) {
@@ -78,21 +101,15 @@ const connectDB = async () => {
   }
 };
 
-// Initialize DB connection (this is still useful for warm starts)
+// Initialize DB connection
 connectDB().catch(err => console.error('Initial DB connection failed:', err));
 
-// Middleware to ensure DB connection is ready (Serverless Friendly)
-app.use(async (req, res, next) => {
-  try {
-    if (!isConnected || mongoose.connection.readyState !== 1) {
-      console.log('Database not connected, attempting to connect...');
-      await connectDB();
-    }
-    next();
-  } catch (error) {
-    console.error('Middleware database connection error:', error);
-    res.status(503).json({ error: 'Database connection failed. Please try again in a few seconds.' });
+// Middleware to ensure DB connection is ready
+app.use((req, res, next) => {
+  if (!isConnected) {
+    return res.status(503).json({ error: 'Database is still connecting. Please try again in a few seconds.' });
   }
+  next();
 });
 
 // Root route for health check
@@ -102,6 +119,8 @@ app.get('/', (req, res) => {
 
 // Routes
 app.use('/auth', authRoutes);
+app.use('/applications', applicationRoutes);
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 /**
  * @swagger
@@ -116,6 +135,18 @@ app.get('/jobs', async (req, res) => {
     res.json(jobs);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch jobs' });
+  }
+});
+
+app.get('/job-details', async (req, res) => {
+  try {
+    const id = req.query.id as string;
+    if (!id) return res.status(400).json({ error: 'Job ID is required' });
+    const job = await jobService.getJobById(id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    res.json(job);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch job' });
   }
 });
 

@@ -350,7 +350,7 @@ export const adminMiddleware = async (req: any, res: any, next: any) => {
   next();
 };
 
-import { JobModel } from '../services/job-aggregator.service';
+import { JobModel } from '../models/job.model';
 
 /**
  * @swagger
@@ -383,19 +383,30 @@ import { JobModel } from '../services/job-aggregator.service';
  */
 router.post('/jobs/create', authMiddleware, employerMiddleware, async (req: any, res: any) => {
   try {
+    const { 
+      title, company, location, salary, description, remote, url, 
+      applicationType, externalApplyUrl, contactEmail, tags, requirements 
+    } = req.body;
+
     const jobData = {
-      ...req.body,
+      title, company, location, salary, description, remote, url,
+      applicationType: applicationType || 'external',
+      externalApplyUrl: applicationType === 'external' ? (externalApplyUrl || url) : undefined,
+      contactEmail,
+      tags: Array.isArray(tags) ? tags : [],
+      requirements: Array.isArray(requirements) ? requirements : [],
       id: `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       source: 'UserPosted',
       isAggregated: false,
       postedBy: req.userId,
       date_posted: new Date().toISOString(),
-      trusted_score: 5 // User-posted jobs are highly trusted by default
+      trusted_score: 5 
     };
     const job = new JobModel(jobData);
     await job.save();
     res.status(201).json(job);
-  } catch (error) {
+  } catch (error: any) {
+    console.error('Create job error:', error.message);
     res.status(500).json({ error: 'Failed to create job' });
   }
 });
@@ -411,8 +422,16 @@ router.post('/jobs/create', authMiddleware, employerMiddleware, async (req: any,
  */
 router.get('/jobs/my-jobs', authMiddleware, employerMiddleware, async (req: any, res: any) => {
   try {
-    const jobs = await JobModel.find({ postedBy: req.userId }).sort({ date_posted: -1 });
-    res.json(jobs);
+    const { default: ApplicationModel } = await import('../models/application.model');
+    const jobs = await JobModel.find({ postedBy: req.userId }).sort({ date_posted: -1 }).lean();
+    
+    // For each job, count applications
+    const jobsWithCounts = await Promise.all(jobs.map(async (job) => {
+      const applicationCount = await ApplicationModel.countDocuments({ jobId: job.id });
+      return { ...job, applicationCount };
+    }));
+
+    res.json(jobsWithCounts);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch jobs' });
   }
